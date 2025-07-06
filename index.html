@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>MISO Real-Time LMP & Constraints</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: auto; padding: 15px; background: #f4f4f4; }
+    h1,h2 { color: #003366; text-align: center; }
+    .info { font-size: 0.95em; color: #555; text-align: center; margin-bottom: 15px; }
+    button { display: block; margin: 10px auto; padding: 10px 16px; font-size: 1em; background: #0066cc; color: white; border: none; border-radius: 4px;}
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: center; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>MISO Real‑Time LMP & Constraints</h1>
+  <button onclick="loadData()">🔄 Refresh Now</button>
+  <div class="info" id="data-info">Loading...</div>
+
+  <h2>⚡ Ex‑Ante LMP (Latest Interval)</h2>
+  <table id="tbl-lmp">
+    <thead><tr><th>Hub</th><th>LMP ($/MWh)</th><th>MCC</th><th>MLC</th></tr></thead>
+    <tbody><tr><td colspan="4">Loading...</td></tr></tbody>
+  </table>
+
+  <h2>🚧 Real‑Time Binding Constraints</h2>
+  <table id="tbl-cons">
+    <thead><tr><th>Constraint</th><th>Type</th><th>Shadow Price</th><th>MW</th></tr></thead>
+    <tbody><tr><td colspan="4">Loading...</td></tr></tbody>
+  </table>
+
+  <script>
+    async function loadData() {
+      const info = document.getElementById('data-info');
+      const lmpBody = document.querySelector('#tbl-lmp tbody');
+      const consBody = document.querySelector('#tbl-cons tbody');
+      info.textContent = lmpBody.innerHTML = consBody.innerHTML = 'Loading...';
+
+      // 1. LMP
+      try {
+        const resp = await fetch('https://api.misoenergy.org/MISORTWDBIReporter/Reporter.asmx?messageType=currentinterval&returnType=csv');
+        const text = await resp.text();
+        const lines = text.trim().split('\n');
+        if (lines.length < 2) throw new Error('No LMP data');
+
+        const headers = lines[0].split(',');
+        const idxHour = headers.indexOf('MKTHOUR_EST'),
+              idxPnode = headers.indexOf('PNODENAME'),
+              idxLMP = headers.indexOf('LMP'),
+              idxMCC = headers.indexOf('MCC'),
+              idxMLC = headers.indexOf('MLC');
+        if ([idxHour, idxPnode, idxLMP, idxMCC, idxMLC].some(i => i < 0))
+          throw new Error('Expected column missing in CSV');
+
+        const first = lines[1].split(',');
+        const mkthour = first[idxHour];
+        const datePart = mkthour.slice(0,10);
+        const timePart = mkthour.slice(11);
+        info.textContent = `Market Day: ${datePart}, Interval Ending: ${timePart} ET`;
+
+        const hubs = lines.slice(1).map(l=>l.split(','))
+          .filter(cols=>cols[idxPnode].toUpperCase().includes('HUB'));
+
+        lmpBody.innerHTML = hubs.length
+          ? hubs.map(c=>`<tr>
+              <td>${c[idxPnode]}</td>
+              <td>${(+c[idxLMP]||0).toFixed(2)}</td>
+              <td>${(+c[idxMCC]||0).toFixed(2)}</td>
+              <td>${(+c[idxMLC]||0).toFixed(2)}</td>
+            </tr>`).join('')
+          : '<tr><td colspan="4">No HUB LMP data</td></tr>';
+
+      } catch (e) {
+        lmpBody.innerHTML = `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+        info.textContent = 'Error loading LMP data';
+      }
+
+      // 2. Constraints
+      try {
+        const resp2 = await fetch('https://api.misoenergy.org/MISORTWDDataBroker/DataBrokerServices.asmx?messageType=getBindingConstraints&returnType=json');
+        const txt2 = await resp2.text();
+        if (!txt2.trim()) throw new Error('No constraints data');
+        const arr = JSON.parse(txt2);
+        consBody.innerHTML = arr.length
+          ? arr.map(c=>`<tr>
+              <td>${c.Constraint}</td><td>${c.ConstraintType}</td>
+              <td>${(+c.ShadowPrice||0).toFixed(2)}</td>
+              <td>${(+c.MW||0).toFixed(1)}</td>
+            </tr>`).join('')
+          : '<tr><td colspan="4">No active constraints</td></tr>';
+      } catch (e) {
+        consBody.innerHTML = `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+      }
+    }
+
+    loadData();
+    setInterval(loadData, 5 * 60 * 1000);
+  </script>
+</body>
+</html>
